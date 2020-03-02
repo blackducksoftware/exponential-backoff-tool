@@ -4,7 +4,7 @@ bin
 pkg
 src/gopkg.in
 src/github.com/*
-src/github.com/Synopsys-SIG-RnD
+!src/github.com/Synopsys-SIG-RnD
 
 
 
