@@ -19,7 +19,6 @@ package cmd
 import (
 	"bytes"
 	"encoding/csv"
-	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -45,9 +44,12 @@ var _realRetryDefault = 0
 var _realMaxDurationDefault = 0
 var _realExpressionDefault = "0"
 
+var _releaseVersion = "0.0.1"
+
 // The parameters this command takes in
 var _debug bool
 var _verbose bool
+var _version bool
 var _expression string
 var _retries int
 var _duration int
@@ -66,13 +68,19 @@ gcloud, awscli, vault, and any other tool requiring an
 API to connect to, and build in configurable exponential
 backoff based off of either error messages, or exit codes.`,
 	Args: func(cmd *cobra.Command, args []string) error {
-		if len(args) < 1 {
-			return errors.New("Requires a command to run")
-		}
 		return nil
 	},
 
 	Run: func(cmd *cobra.Command, args []string) {
+		if _version {
+			fmt.Println(_releaseVersion)
+			os.Exit(1)
+		}
+		if len(args) < 1 {
+			cmd.Help()
+			os.Stderr.WriteString("\nExponential Backoff Tool requires at least 1 argument!\n")
+			os.Exit(1)
+		}
 		os.Exit(ExponentialBackoff(args, _debug, _verbose, _expression, _retries, _duration, _iniFile, _retryOnExitCodes, _retryOnStringMatches))
 	},
 }
@@ -378,5 +386,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&_retryOnExitCodes, "retry-on-exit-codes", "c", "", "A comma delimited list of exit codes to try on.")
 	rootCmd.PersistentFlags().StringVarP(&_retryOnStringMatches, "retry-on-string-matches", "s", "", "A comma delimited list of strings found in stderr or stdout to retry on.")
 	rootCmd.PersistentFlags().BoolVarP(&_verbose, "verbose", "v", false, "Enable Verbose Output")
+	rootCmd.PersistentFlags().BoolVar(&_version, "version", false, "Print the version and exit")
 	rootCmd.PersistentFlags().BoolVarP(&_debug, "debug", "d", false, "Enable Debugging")
 }

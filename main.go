@@ -15,7 +15,7 @@ limitations under the License.
 */
 package main
 
-import "github.com/Synopsys-SIG-RnD/eb/cmd"
+import "github.com/blackducksoftware/exponential-backoff-tool/cmd"
 
 func main() {
 	cmd.Execute()
