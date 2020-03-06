@@ -23,11 +23,13 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Knetic/govaluate"
+	shellwords "github.com/mattn/go-shellwords"
 	logging "github.com/op/go-logging"
 	"github.com/spf13/cobra"
 	ini "gopkg.in/ini.v1"
@@ -35,27 +37,21 @@ import (
 
 var log *logging.Logger
 
-// We load the flags from INI files as well as from the command line...
-// So the command line values by default are unset, represented as -1
-// However, the command line values also take precedence...
-// If the value remains unset throughout the loading process, these
-// will be the default values (not -1)
-var _realRetryDefault = 0
-var _realMaxDurationDefault = 0
-var _realExpressionDefault = "0"
-
-var _releaseVersion = "0.0.1"
+var _releaseVersion = "0.0.2"
 
 // The parameters this command takes in
 var _debug bool
+var _kill bool
 var _verbose bool
 var _version bool
 var _expression string
 var _retries int
 var _duration int
 var _iniFile string
+var _retryOnAll bool
 var _retryOnExitCodes string
 var _retryOnStringMatches string
+var _retryOnRegexpMatches string
 
 // The command definition
 var rootCmd = &cobra.Command{
@@ -72,45 +68,58 @@ backoff based off of either error messages, or exit codes.`,
 	},
 
 	Run: func(cmd *cobra.Command, args []string) {
+		configureLogging(_verbose, _debug)
 		if _version {
 			fmt.Println(_releaseVersion)
 			os.Exit(1)
+		}
+		if _kill {
+			s1 := rand.NewSource(time.Now().UnixNano())
+			r1 := rand.New(s1)
+			if r1.Float64() > .25 {
+				fmt.Println("Sample failure")
+				os.Exit(1)
+			} else {
+				fmt.Println("Sample success")
+				os.Exit(0)
+			}
 		}
 		if len(args) < 1 {
 			cmd.Help()
 			os.Stderr.WriteString("\nExponential Backoff Tool requires at least 1 argument!\n")
 			os.Exit(1)
 		}
-		os.Exit(ExponentialBackoff(args, _debug, _verbose, _expression, _retries, _duration, _iniFile, _retryOnExitCodes, _retryOnStringMatches))
+		command := convertArgs(args)
+		expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps := loadParameters(cmd, command[0], _iniFile, _expression, _retries, _duration, _retryOnAll, _retryOnExitCodes, _retryOnStringMatches, _retryOnRegexpMatches)
+		os.Exit(ExponentialBackoff(command, expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps))
 	},
 }
 
-func getStringParameter(cfg *ini.File, command string, key string, currentValue string, nullValue string) string {
-	log.Debug("Searching for ", command, "/", key, "...")
-	if cfg.Section(command).HasKey(key) {
-		value := cfg.Section(command).Key(key).String()
-		if currentValue == nullValue {
-			log.Debug("Found", value)
-			return value
+func convertArgs(command []string) []string {
+	log.Debug("Command Parts")
+	for _, element := range command {
+		log.Debug(element)
+	}
+
+	if len(command) == 1 {
+		log.Debug("Parsing:", command[0])
+		var err error
+		command, err = shellwords.Parse(command[0])
+		if err != nil {
+			log.Error("Unable to parse command input:", command[0])
+			log.Critical(err)
+			os.Exit(1)
+		}
+
+		log.Debug("Command string parsed as:\n")
+		for _, field := range command {
+			log.Debug(field)
 		}
 	}
-	return currentValue
+	return command
 }
 
-func getIntParameter(cfg *ini.File, command string, key string, currentValue int, nullValue int) int {
-	if cfg.Section(command).HasKey(key) {
-		value, _ := cfg.Section(command).Key(key).Int()
-		if currentValue == nullValue {
-			return value
-		}
-	}
-	return currentValue
-}
-
-// ExponentialBackoff this is a separate function because perhaps somebody wants to run this
-// without calling the command line in their golang code
-func ExponentialBackoff(command []string, debug bool, verbose bool, expression string, retries int, duration int, iniFile string, retryOnExitCodes string, retryOnStringMatches string) int {
-
+func configureLogging(verbose bool, debug bool) {
 	// Configure the logging
 	var format = logging.MustStringFormatter(
 		`%{color}%{time:15:04:05.000} %{shortfunc} ▶ %{level:.4s} %{id:03x}%{color:reset} %{message}`,
@@ -128,32 +137,42 @@ func ExponentialBackoff(command []string, debug bool, verbose bool, expression s
 	}
 	logging.SetBackend(backend1Leveled)
 	log = logging.MustGetLogger("root")
-	log.Debug("Command Parts")
-	for _, element := range command {
-		log.Debug(element)
-	}
+}
 
-	// Treat the retry strings list as a row from a CSV file so we don't need to do intelligent parsing
-	// The command we are running can be passed in as a string "kubectl get pods" or as multiple arguements ["kubectl","get","pods"].
-	// The former is required when command line parameters for this command override the parameters of the sub-command.
-	// The latter is provided for convenience (much like the `watch` command)
-	if len(command) == 1 {
-		log.Debug("Parsing:", command[0])
-		r := csv.NewReader(strings.NewReader(command[0]))
-		r.Comma = ' '
-		var err error
-		command, err = r.Read()
-		if err != nil {
-			log.Critical(err)
-			return 1
-		}
-		log.Debug("Command string parsed as:\n")
-		for _, field := range command {
-			log.Debug(field)
+func getStringParameter(cmd *cobra.Command, cfg *ini.File, command string, key string, currentValue string, flag string) string {
+	log.Debug("Searching for ", command, "/", key, "...")
+	if cfg.Section(command).HasKey(key) {
+		value := cfg.Section(command).Key(key).String()
+		if !cmd.Flags().Changed(flag) {
+			log.Debug("Found", value)
+			return value
 		}
 	}
+	return currentValue
+}
 
-	// Configure the default location of the INI file
+func getIntParameter(cmd *cobra.Command, cfg *ini.File, command string, key string, currentValue int, flag string) int {
+	if cfg.Section(command).HasKey(key) {
+		value, _ := cfg.Section(command).Key(key).Int()
+		if !cmd.Flags().Changed(flag) {
+			return value
+		}
+	}
+	return currentValue
+}
+
+func getBoolParameter(cmd *cobra.Command, cfg *ini.File, command string, key string, currentValue bool, flag string) bool {
+	if cfg.Section(command).HasKey(key) {
+		value, _ := cfg.Section(command).Key(key).Bool()
+		if !cmd.Flags().Changed(flag) {
+			return value
+		}
+	}
+	return currentValue
+}
+
+func loadParameters(cmd *cobra.Command, command string, iniFile string, expression string, retries int, duration int, retryOnAll bool, retryOnExitCodes string, retryOnStringMatches string, retryOnRegexpMatches string) (string, int, int, bool, []int, []string, []*regexp.Regexp) {
+	// Configure the defaxwult location of the INI file
 	loadIniFile := iniFile
 	if iniFile == "" {
 		home, err := os.UserHomeDir()
@@ -172,55 +191,60 @@ func ExponentialBackoff(command []string, debug bool, verbose bool, expression s
 	if err != nil {
 		if iniFile != "" {
 			log.Critical("Fail to read file: ", err)
-			return 1
+			os.Exit(1)
 		}
 		log.Warning("Fail to read file: ", err)
 	} else {
 		log.Info("Loaded INI file:", loadIniFile)
-		log.Info("Loading configuration settings for:", command[0])
+		log.Info("Loading configuration settings for:", command)
 
 		// By default, command line parameters come first...
 
-		// If those are not defined,  look in the local section
-		retryOnExitCodes = getStringParameter(cfg, command[0], "retry_on_exit_codes", retryOnExitCodes, "")
-		retryOnStringMatches = getStringParameter(cfg, command[0], "retry_on_string_matches", retryOnStringMatches, "")
-		expression = getStringParameter(cfg, command[0], "expression", expression, "")
-		retries = getIntParameter(cfg, command[0], "retries", retries, -1)
-		duration = getIntParameter(cfg, command[0], "duration", duration, -1)
-
-		log.Debug("After Loading Local INI Settings:")
-		log.Debug("Expression: ", expression)
-		log.Debug("Retries: ", retries)
-		log.Debug("Duration: ", duration)
-		log.Debug("Retry On Exit Codes: ", retryOnExitCodes)
-		log.Debug("Retry On String Matches: ", retryOnStringMatches)
-
 		// If  not defined there, check the global section
-		expression = getStringParameter(cfg, "", "expression", expression, "")
-		retries = getIntParameter(cfg, "", "retries", retries, -1)
-		duration = getIntParameter(cfg, "", "duration", duration, -1)
+		expression = getStringParameter(cmd, cfg, "", "expression", expression, "expression")
+		retries = getIntParameter(cmd, cfg, "", "retries", retries, "retries")
+		duration = getIntParameter(cmd, cfg, "", "duration", duration, "duration")
 
 		log.Debug("After Loading Global INI Settings:")
 		log.Debug("Expression: ", expression)
 		log.Debug("Retries: ", retries)
 		log.Debug("Duration: ", duration)
+		log.Debug("Retry On All: ", retryOnAll)
 		log.Debug("Retry On Exit Codes: ", retryOnExitCodes)
 		log.Debug("Retry On String Matches: ", retryOnStringMatches)
+		log.Debug("Retry On Regexp Matches: ", retryOnRegexpMatches)
+
+		// If anything is defined in the local section, override
+		// cmd.Flags().IsSet()
+		retryOnExitCodes = getStringParameter(cmd, cfg, command, "retry_on_exit_codes", retryOnExitCodes, "retry-on-exit-codes")
+		retryOnStringMatches = getStringParameter(cmd, cfg, command, "retry_on_string_matches", retryOnStringMatches, "retry-on-string-matches")
+		retryOnRegexpMatches = getStringParameter(cmd, cfg, command, "retry_on_regexp_matches", retryOnRegexpMatches, "retry-on-regexp-matches")
+		retryOnAll = getBoolParameter(cmd, cfg, command, "retry_on_all", retryOnAll, "retry-on-all")
+		expression = getStringParameter(cmd, cfg, command, "expression", expression, "expression")
+		retries = getIntParameter(cmd, cfg, command, "retries", retries, "retries")
+		duration = getIntParameter(cmd, cfg, command, "duration", duration, "duration")
+
+		log.Debug("After Loading Local INI Settings:")
+		log.Debug("Expression: ", expression)
+		log.Debug("Retries: ", retries)
+		log.Debug("Duration: ", duration)
+		log.Debug("Retry On All: ", retryOnAll)
+		log.Debug("Retry On Exit Codes: ", retryOnExitCodes)
+		log.Debug("Retry On String Matches: ", retryOnStringMatches)
+		log.Debug("Retry On Regexp Matches: ", retryOnRegexpMatches)
 	}
 
 	// If after checking everywhere, the values are still -1, set them to their defaults
-	if expression == "" {
-		expression = _realExpressionDefault
-	}
+	/*
+		if expression == "" {
+			expression = _realExpressionDefault
+		}
 
-	if retries == -1 && duration == -1 {
-		retries = _realRetryDefault
-		duration = _realMaxDurationDefault
-	} /* else if retries == -1 && duration != -1 {
-		retries = 65535
-	} else if retries != -1 && duration == -1 {
-		duration = 65535
-	}*/
+		if retries == -1 && duration == -1 {
+			retries = _realRetryDefault
+			duration = _realMaxDurationDefault
+		}
+	*/
 
 	// Treat the retry codes list as a row from a CSV file so we don't need to do intelligent parsing
 	var ignoreExitCodes []int
@@ -229,7 +253,7 @@ func ExponentialBackoff(command []string, debug bool, verbose bool, expression s
 		ignoreExitCodesStr, err := r.Read()
 		if err != nil {
 			log.Critical(err)
-			return 1
+			os.Exit(1)
 		}
 
 		log.Debug("Retrying on the following exit codes:\n")
@@ -237,7 +261,7 @@ func ExponentialBackoff(command []string, debug bool, verbose bool, expression s
 			code, err := strconv.Atoi(field)
 			if err != nil {
 				log.Critical(err)
-				return 1
+				os.Exit(1)
 			}
 			ignoreExitCodes = append(ignoreExitCodes, code)
 			log.Debug(code)
@@ -251,7 +275,7 @@ func ExponentialBackoff(command []string, debug bool, verbose bool, expression s
 		ignoreStringsStr, err := r.Read()
 		if err != nil {
 			log.Critical(err)
-			return 1
+			os.Exit(1)
 		}
 		log.Debug("Retrying if the following strings are found:\n")
 		for _, field := range ignoreStringsStr {
@@ -260,19 +284,45 @@ func ExponentialBackoff(command []string, debug bool, verbose bool, expression s
 		}
 	}
 
+	// Treat the retry strings list as a row from a CSV file so we don't need to do intelligent parsing
+	var ignoreRegexps []*regexp.Regexp
+	if retryOnRegexpMatches != "" {
+		r := csv.NewReader(strings.NewReader(retryOnRegexpMatches))
+		ignoreRegexpStr, err := r.Read()
+		if err != nil {
+			log.Critical(err)
+			os.Exit(1)
+		}
+		log.Debug("Retrying if the following Regular Expressions are found:\n")
+		for _, field := range ignoreRegexpStr {
+			log.Debug(field)
+			ignoreRegexps = append(ignoreRegexps, regexp.MustCompile(field))
+		}
+	}
+
+	return expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps
+}
+
+// ExponentialBackoff this is a separate function because perhaps somebody wants to run this
+// without calling the command line in their golang code
+func ExponentialBackoff(command []string, expression string, retries int, duration int, retryOnAll bool, ignoreExitCodes []int, ignoreStrings []string, ignoreRegexps []*regexp.Regexp) int {
+
 	log.Info("------ Settings ------")
 	log.Info("Expression             : ", expression)
 	log.Info("Retries                : ", retries)
 	log.Info("Duration               : ", duration)
-	log.Info("Retry On Exit Codes    : ", retryOnExitCodes)
-	log.Info("Retry On String Matches: ", retryOnStringMatches)
+	log.Info("Retry On All           : ", retryOnAll)
+	log.Info("Retry On Exit Codes    : ", ignoreExitCodes)
+	log.Info("Retry On String Matches: ", ignoreStrings)
+	log.Info("Retry On Regexp Matches: ", ignoreRegexps)
 	log.Info("Command to Run         : ", command)
 	log.Info("----------------------")
 
 	xIncrement := 0
 	start := time.Now()
 	for {
-		log.Debug("Running ", command[0])
+		log.Debug("Running:", command[0])
+		log.Debug("Params:", command[1:len(command)])
 		cmd := exec.Command(command[0], command[1:len(command)]...)
 		var out bytes.Buffer
 		var stderr bytes.Buffer
@@ -285,23 +335,40 @@ func ExponentialBackoff(command []string, debug bool, verbose bool, expression s
 
 		// Do not exit if the exit code matched our input retryOnExitCodes
 		if exitCode != 0 {
+			if needToExit && retryOnAll {
+				log.Debug("Program exited with code: ", exitCode, ". Restarting on all non-zero exit codes.")
+				needToExit = false
+			}
+
 			for i := range ignoreExitCodes {
-				if exitCode == ignoreExitCodes[i] {
+				if needToExit && exitCode == ignoreExitCodes[i] {
 					log.Debug("Program exited with code: ", exitCode, ". Restarting.")
 					needToExit = false
 				}
 			}
-		}
 
-		// Do not exit if output / stderr from the command contained a string in our retryOnMatchedStrings list
-		for i := range ignoreStrings {
-			if strings.Contains(out.String(), ignoreStrings[i]) {
-				log.Debug("Output stream contained: ", ignoreStrings[i], ". Restarting.")
-				needToExit = false
+			// Do not exit if output / stderr from the command contained a string in our retryOnMatchedStrings list
+			for i := range ignoreStrings {
+				if needToExit && strings.Contains(out.String(), ignoreStrings[i]) {
+					log.Debug("Output stream contained: ", ignoreStrings[i], ". Restarting.")
+					needToExit = false
+				}
+				if needToExit && strings.Contains(stderr.String(), ignoreStrings[i]) {
+					log.Debug("Error stream contained: ", ignoreStrings[i], ". Restarting.")
+					needToExit = false
+				}
 			}
-			if strings.Contains(stderr.String(), ignoreStrings[i]) {
-				log.Debug("Error stream contained: ", ignoreStrings[i], ". Restarting.")
-				needToExit = false
+
+			// Do not exit if output / stderr from the command contained a string in our retryOnMatchedStrings list
+			for i := range ignoreRegexps {
+				if needToExit && ignoreRegexps[i].MatchString(out.String()) {
+					log.Debug("Output stream contained regexp: ", ignoreRegexps[i], ". Restarting.")
+					needToExit = false
+				}
+				if needToExit && ignoreRegexps[i].MatchString(stderr.String()) {
+					log.Debug("Error stream contained regexp: ", ignoreRegexps[i], ". Restarting.")
+					needToExit = false
+				}
 			}
 		}
 
@@ -318,6 +385,7 @@ func ExponentialBackoff(command []string, debug bool, verbose bool, expression s
 		xIncrement++
 		t := time.Now()
 		elapsed := t.Sub(start)
+		log.Debug("Elapsed Time:", elapsed)
 
 		if xIncrement > retries && retries != -1 {
 			log.Warning("Failed to complete command due to retries exhausted:", command)
@@ -326,7 +394,9 @@ func ExponentialBackoff(command []string, debug bool, verbose bool, expression s
 			fmt.Print(out.String())
 			return exitCode
 		}
-		if elapsed > time.Duration(duration)*time.Second && duration != -1 {
+
+		log.Debug("Time check:", elapsed, ">=", time.Duration(duration)*time.Second, "?")
+		if elapsed >= time.Duration(duration)*time.Second && duration != -1 {
 			log.Warning("Failed to complete command due to maximum runtime exhausted:", command)
 			log.Warning("Exitting with error code:", exitCode)
 			os.Stderr.WriteString(stderr.String())
@@ -360,8 +430,20 @@ func ExponentialBackoff(command []string, debug bool, verbose bool, expression s
 		log.Debug("Formula calculation:", value)
 
 		log.Info("Program exitted with exit code: ", cmd.ProcessState.ExitCode())
-		sleepForD := time.Duration(value) * time.Second
-		log.Info("Time to sleeping for before retrying: ", result)
+		//time.Duration will round to whatever it is multiplied by... do not switch to time.Second
+		sleepForD := time.Duration(value*1000) * time.Millisecond
+		log.Debug("Planning to sleep for", sleepForD)
+
+		t = time.Now()
+		elapsed = t.Sub(start)
+		// If our max wait is 600 seconds, we've waited 596, and our next wait duration is 30,
+		// do some math so we don't go over 600 seconds
+		log.Debug("Overrun check:", (elapsed + sleepForD), ">=", time.Duration(duration)*time.Second)
+		if elapsed+sleepForD >= time.Duration(duration)*time.Second && duration != -1 {
+			sleepForD = time.Duration(duration)*time.Second - elapsed
+			log.Debug("Adjusted Sleep Due To Max Overrun:", sleepForD)
+		}
+		log.Info("Time to sleeping for before retrying: ", sleepForD)
 
 		time.Sleep(sleepForD)
 	}
@@ -379,13 +461,16 @@ func Execute() {
 func init() {
 	// eb is a root command with no sub-commands, so everything is global and persistant
 	// use hyphens instead of camelCase because that is what curl does
-	rootCmd.PersistentFlags().StringVarP(&_iniFile, "ini-file", "f", "", "An INI file to load with tool settings (Default: $HOME/.eb.ini)\nThe INI file supports global and local parameters.\nLocal parameters override global parameters.\nSample ini")
-	rootCmd.PersistentFlags().StringVarP(&_expression, "expression", "e", "", "A mathmematical expression representing the time to wait on each retry (Default: \"0\").\nThe variable 'x' is the current iteration (0 based).\nThe variable 'i' is the current iteration (1 based).\nThe variable 'r' is a random float from 0-1.\nExamples: \"x*15+15\", \"x*x\", \"(x*x)+(10*r)\"\n")
-	rootCmd.PersistentFlags().IntVarP(&_retries, "retries", "r", -1, "The number of times to retry the command (Default: 0)")
-	rootCmd.PersistentFlags().IntVarP(&_duration, "duration", "t", -1, "How long to keep retrying for (Default: 0)")
-	rootCmd.PersistentFlags().StringVarP(&_retryOnExitCodes, "retry-on-exit-codes", "c", "", "A comma delimited list of exit codes to try on.")
-	rootCmd.PersistentFlags().StringVarP(&_retryOnStringMatches, "retry-on-string-matches", "s", "", "A comma delimited list of strings found in stderr or stdout to retry on.")
-	rootCmd.PersistentFlags().BoolVarP(&_verbose, "verbose", "v", false, "Enable Verbose Output")
+	rootCmd.PersistentFlags().StringVarP(&_iniFile, "ini-file", "f", "", "An INI file to load with tool settings (default $HOME/.eb.ini)\nThe INI file supports global and local parameters\nLocal parameters override global parameters")
+	rootCmd.PersistentFlags().StringVarP(&_expression, "expression", "e", "0", "A mathmematical expression representing the time to wait on each retry\nThe variable 'x' is the current iteration (0 based)\nThe variable 'i' is the current iteration (1 based)\nThe variable 'r' is a random float from 0-1\nExamples: \"x*15+15\", \"x*x\", \"(x*x)+(10*r)\"")
+	rootCmd.PersistentFlags().IntVarP(&_retries, "retries", "r", -1, "The number of times to retry the command")
+	rootCmd.PersistentFlags().IntVarP(&_duration, "duration", "d", -1, "How many seconds to keep retrying")
+	rootCmd.PersistentFlags().BoolVarP(&_retryOnAll, "retry-on-all", "a", false, "Retry on all non-zero exit codes")
+	rootCmd.PersistentFlags().StringVarP(&_retryOnExitCodes, "retry-on-exit-codes", "c", "", "A comma delimited list of exit codes to try on")
+	rootCmd.PersistentFlags().StringVarP(&_retryOnStringMatches, "retry-on-string-matches", "s", "", "A comma delimited list of strings found in stderr or stdout to retry on")
+	rootCmd.PersistentFlags().StringVarP(&_retryOnRegexpMatches, "retry-on-regexp-matches", "x", "", "A comma delimited list of regular expressions found in stderr or stdout to retry on")
+	rootCmd.PersistentFlags().BoolVarP(&_verbose, "verbose", "v", false, "Enable verbose output")
 	rootCmd.PersistentFlags().BoolVar(&_version, "version", false, "Print the version and exit")
-	rootCmd.PersistentFlags().BoolVarP(&_debug, "debug", "d", false, "Enable Debugging")
+	rootCmd.PersistentFlags().BoolVarP(&_kill, "kill", "k", false, "Immediately exit with a .75 probability (for testing failures)")
+	rootCmd.PersistentFlags().BoolVarP(&_debug, "debug", "g", false, "Enable debugging")
 }

@@ -38,10 +38,10 @@ The `<command>` can be passed in without quotas, such as `eb curl www.google.com
 This command will provide the original exit code from the command running. 
 
 ##### Flags
-* `-d, --debug`
-Enable Debugging
-* `-t, --duration`
-*(Integer)* How long to keep retrying for (Default: 0)
+* `-g, --debug`
+Enable debugging.
+* `-d, --duration`
+*(Integer)* How long to keep retrying for (Default: -1)
 * `-e, --expression`
 *(String)* A mathmematical expression representing the time to wait on each retry (Default: "0").
 The variable 'x' is the current iteration (0 based).
@@ -54,13 +54,22 @@ Print the help screen
 *(String)* An INI file to load with tool settings (Default: $HOME/.eb.ini)
 The INI file supports global and local parameters.
 Local parameters override global parameters.
+* `-k, --kill`
+Fail the `eb` 75% of the time without running anything. Useful in testing expressions or intermittent failures.
 * `-r, --retries`
-*(Intger)* The number of times to retry the command (Default: 0)
+*(Intger)* The number of times to retry the command (Default: -1)
+* `-a, --retry-on-all`
+Retry on all non-zero exit codes.
 * `-c, --retry-on-exit-codes`
 *(String)* A comma delimited list of exit codes to try on.
+* `  -x, --retry-on-regexp-matches`
+A comma delimited list of regular expressions found in stderr or stdout to retry on.
 * `-s, --retry-on-string-matches`
 A comma delimited list of strings found in stderr or stdout to retry on.
-* `-v, --verbose` Enable Verbose Output
+* `-v, --verbose` 
+Enable Verbose Output.
+* `--version` 
+Print the version and exit.
  
 ##### Sample INI File
 Command line parameters override the INI file. Local sections of the INI file override global sections of the INI file. expression: "15*i"
@@ -102,6 +111,9 @@ Command line parameters override the INI file. Local sections of the INI file ov
 # retries: 15
 # duration: 60
 
+# If any non-zero exit code is returned, retry the command.
+# retry_on_all: "false"
+
 # If the following exit code is returned, retry the command.
 # This is comma-delimited. The values "1,2,3" and "1","2","3"
 # are synonymous.
@@ -119,6 +131,11 @@ Running the `eb` without any parameters is like running the original `command` a
 ```
 $ eb kubectl get pods
 Unable to connect to the server: dial tcp 127.0.0.1:443: i/o timeout
+```
+
+The EB command can be conviently tested to see how different expressions work:
+```
+eb "eb -k" -c 1 -e "5*x" -r 2
 ```
 
 This will retry 10 times, waiting 1,1,1,1...1 seconds between each iteration
