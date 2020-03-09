@@ -1,4 +1,5 @@
 # Exponential Backoff Tool
+![Build](https://github.com/blackducksoftware/exponential-backoff-tool/workflows/Build/badge.svg) ![Github Releases (by Release)](https://img.shields.io/github/downloads/blackducksoftware/exponential-backoff-tool/total.svg) ![Go Report](https://goreportcard.com/badge/github.com/blackducksoftware/exponential-backoff-tool)
 ### Introduction
 Exponential Backoff Tool is a command line tool for performing intelligent retries based on the output of a shell command.
 
