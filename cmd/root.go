@@ -37,7 +37,7 @@ import (
 
 var log *logging.Logger
 
-var _releaseVersion = "0.0.2"
+var _releaseVersion = "0.0.3"
 
 // The parameters this command takes in
 var _debug bool
@@ -102,11 +102,12 @@ func convertArgs(command []string) []string {
 	}
 
 	if len(command) == 1 {
-		log.Debug("Parsing:", command[0])
+		commandString := command[0]
+		log.Debug("Parsing:", commandString)
 		var err error
-		command, err = shellwords.Parse(command[0])
+		command, err = shellwords.Parse(commandString)
 		if err != nil {
-			log.Error("Unable to parse command input:", command[0])
+			log.Error("Unable to parse command input:", commandString)
 			log.Critical(err)
 			os.Exit(1)
 		}
