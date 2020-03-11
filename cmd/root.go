@@ -52,6 +52,7 @@ var _retryOnAll bool
 var _retryOnExitCodes string
 var _retryOnStringMatches string
 var _retryOnRegexpMatches string
+var _performOnFailure string
 
 // The command definition
 var rootCmd = &cobra.Command{
@@ -90,8 +91,8 @@ backoff based off of either error messages, or exit codes.`,
 			os.Exit(1)
 		}
 		command := convertArgs(args)
-		expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps := loadParameters(cmd, command[0], _iniFile, _expression, _retries, _duration, _retryOnAll, _retryOnExitCodes, _retryOnStringMatches, _retryOnRegexpMatches)
-		os.Exit(ExponentialBackoff(command, expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps))
+		expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps, performOnFailure := loadParameters(cmd, command[0], _iniFile, _expression, _retries, _duration, _retryOnAll, _retryOnExitCodes, _retryOnStringMatches, _retryOnRegexpMatches, _performOnFailure)
+		os.Exit(ExponentialBackoff(command, expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps, performOnFailure))
 	},
 }
 
@@ -172,7 +173,7 @@ func getBoolParameter(cmd *cobra.Command, cfg *ini.File, command string, key str
 	return currentValue
 }
 
-func loadParameters(cmd *cobra.Command, command string, iniFile string, expression string, retries int, duration int, retryOnAll bool, retryOnExitCodes string, retryOnStringMatches string, retryOnRegexpMatches string) (string, int, int, bool, []int, []string, []*regexp.Regexp) {
+func loadParameters(cmd *cobra.Command, command string, iniFile string, expression string, retries int, duration int, retryOnAll bool, retryOnExitCodes string, retryOnStringMatches string, retryOnRegexpMatches string, performOnFailure string) (string, int, int, bool, []int, []string, []*regexp.Regexp, string) {
 	// Configure the defaxwult location of the INI file
 	loadIniFile := iniFile
 	if iniFile == "" {
@@ -214,12 +215,14 @@ func loadParameters(cmd *cobra.Command, command string, iniFile string, expressi
 		log.Debug("Retry On Exit Codes: ", retryOnExitCodes)
 		log.Debug("Retry On String Matches: ", retryOnStringMatches)
 		log.Debug("Retry On Regexp Matches: ", retryOnRegexpMatches)
+		log.Debug("Perform On Failure: ", performOnFailure)
 
 		// If anything is defined in the local section, override
 		// cmd.Flags().IsSet()
 		retryOnExitCodes = getStringParameter(cmd, cfg, command, "retry_on_exit_codes", retryOnExitCodes, "retry-on-exit-codes")
 		retryOnStringMatches = getStringParameter(cmd, cfg, command, "retry_on_string_matches", retryOnStringMatches, "retry-on-string-matches")
 		retryOnRegexpMatches = getStringParameter(cmd, cfg, command, "retry_on_regexp_matches", retryOnRegexpMatches, "retry-on-regexp-matches")
+		performOnFailure = getStringParameter(cmd, cfg, command, "perform_on_failure", performOnFailure, "perform-on-failure")
 		retryOnAll = getBoolParameter(cmd, cfg, command, "retry_on_all", retryOnAll, "retry-on-all")
 		expression = getStringParameter(cmd, cfg, command, "expression", expression, "expression")
 		retries = getIntParameter(cmd, cfg, command, "retries", retries, "retries")
@@ -233,6 +236,7 @@ func loadParameters(cmd *cobra.Command, command string, iniFile string, expressi
 		log.Debug("Retry On Exit Codes: ", retryOnExitCodes)
 		log.Debug("Retry On String Matches: ", retryOnStringMatches)
 		log.Debug("Retry On Regexp Matches: ", retryOnRegexpMatches)
+		log.Debug("Perform On Failure: ", performOnFailure)
 	}
 
 	// If after checking everywhere, the values are still -1, set them to their defaults
@@ -301,12 +305,12 @@ func loadParameters(cmd *cobra.Command, command string, iniFile string, expressi
 		}
 	}
 
-	return expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps
+	return expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps, performOnFailure
 }
 
 // ExponentialBackoff this is a separate function because perhaps somebody wants to run this
 // without calling the command line in their golang code
-func ExponentialBackoff(command []string, expression string, retries int, duration int, retryOnAll bool, ignoreExitCodes []int, ignoreStrings []string, ignoreRegexps []*regexp.Regexp) int {
+func ExponentialBackoff(command []string, expression string, retries int, duration int, retryOnAll bool, ignoreExitCodes []int, ignoreStrings []string, ignoreRegexps []*regexp.Regexp, performOnFailure string) int {
 
 	log.Info("------ Settings ------")
 	log.Info("Expression             : ", expression)
@@ -316,6 +320,7 @@ func ExponentialBackoff(command []string, expression string, retries int, durati
 	log.Info("Retry On Exit Codes    : ", ignoreExitCodes)
 	log.Info("Retry On String Matches: ", ignoreStrings)
 	log.Info("Retry On Regexp Matches: ", ignoreRegexps)
+	log.Info("Perform On Failure     : ", performOnFailure)
 	log.Info("Command to Run         : ", command)
 	log.Info("----------------------")
 
@@ -447,6 +452,39 @@ func ExponentialBackoff(command []string, expression string, retries int, durati
 		log.Info("Time to sleeping for before retrying: ", sleepForD)
 
 		time.Sleep(sleepForD)
+
+		if performOnFailure != "" {
+			log.Debug("Parsing:", performOnFailure)
+			errorCommand, err := shellwords.Parse(performOnFailure)
+			if err != nil {
+				log.Error("Unable to parse Perform On Failure command input:", performOnFailure)
+				log.Critical(err)
+				os.Exit(1)
+			}
+
+			log.Debug("Perform On Failure Command string parsed as:\n")
+			for _, field := range errorCommand {
+				log.Debug(field)
+			}
+
+			log.Debug("Running:", errorCommand[0])
+			log.Debug("Params:", errorCommand[1:len(errorCommand)])
+			ecmd := exec.Command(errorCommand[0], errorCommand[1:len(errorCommand)]...)
+			var eout bytes.Buffer
+			var estderr bytes.Buffer
+			ecmd.Stdout = &eout
+			ecmd.Stderr = &estderr
+			ecmd.Run()
+			eexitCode := ecmd.ProcessState.ExitCode()
+			log.Debug("Command exitted with ", eexitCode)
+			log.Info(estderr.String())
+			log.Info(eout.String())
+			if eexitCode != 0 {
+				log.Error("Unable To Run Perform On Failure command:", performOnFailure)
+				log.Critical(err)
+				os.Exit(1)
+			}
+		}
 	}
 }
 
@@ -467,6 +505,7 @@ func init() {
 	rootCmd.PersistentFlags().IntVarP(&_retries, "retries", "r", -1, "The number of times to retry the command")
 	rootCmd.PersistentFlags().IntVarP(&_duration, "duration", "d", -1, "How many seconds to keep retrying")
 	rootCmd.PersistentFlags().BoolVarP(&_retryOnAll, "retry-on-all", "a", false, "Retry on all non-zero exit codes")
+	rootCmd.PersistentFlags().StringVarP(&_performOnFailure, "perform-on-failure", "p", "", "A command to run prior to retrying the command")
 	rootCmd.PersistentFlags().StringVarP(&_retryOnExitCodes, "retry-on-exit-codes", "c", "", "A comma delimited list of exit codes to try on")
 	rootCmd.PersistentFlags().StringVarP(&_retryOnStringMatches, "retry-on-string-matches", "s", "", "A comma delimited list of strings found in stderr or stdout to retry on")
 	rootCmd.PersistentFlags().StringVarP(&_retryOnRegexpMatches, "retry-on-regexp-matches", "x", "", "A comma delimited list of regular expressions found in stderr or stdout to retry on")

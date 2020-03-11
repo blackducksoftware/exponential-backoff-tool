@@ -1,5 +1,5 @@
 # Exponential Backoff Tool
-![Build](https://github.com/blackducksoftware/exponential-backoff-tool/workflows/Build/badge.svg) ![Github Releases (by Release)](https://img.shields.io/github/downloads/blackducksoftware/exponential-backoff-tool/total.svg) ![Go Report](https://goreportcard.com/badge/github.com/blackducksoftware/exponential-backoff-tool)
+
 ### Introduction
 Exponential Backoff Tool is a command line tool for performing intelligent retries based on the output of a shell command.
 
@@ -57,6 +57,8 @@ The INI file supports global and local parameters.
 Local parameters override global parameters.
 * `-k, --kill`
 Fail the `eb` 75% of the time without running anything. Useful in testing expressions or intermittent failures.
+* `-p, --perfom-on-failure`
+*(String)* A command to run whenever the original command fails. This command does not exponentially backoff and is intended for cleanup to keep the original command working (such as a command that touchs a file when it runs with the intent of populating it, it fails, and then a subsequent run fails because the file was touched)
 * `-r, --retries`
 *(Intger)* The number of times to retry the command (Default: -1)
 * `-a, --retry-on-all`
@@ -125,6 +127,13 @@ Command line parameters override the INI file. Local sections of the INI file ov
 # delimited. The values "1,2,3" and "1","2","3" are
 # synonymous.
 # retry_on_string_matches: "Could not resolve host:"
+
+# Perform on failure can be used to run a command to clean up
+# whatever the root command performed. That could be removing
+# a PID file, or in my use case, a file the gets 'touched', with
+# no contents due to command failure, and then subsequent commands
+# fail because the file exists
+# perform_on_failure: "echo failed"
 ```
 
 ### Examples
