@@ -182,3 +182,12 @@ This will retry either 10 times or for 10 seconds whichever comes first, waiting
 ```
 $ eb kubectl get pods -e "i*15+5*r" -r 10 -t 10 -s "Unable to connect to the server"
 ```
+
+### Jenkins Example
+
+Jenkins is really difficult to deal with when using quotes, and with `eb`, you may need multiple quotes. Here is an exmaple of that:
+```
+sh '''
+PGPASSWORD=${PASSWORD} eb "psql -h 127.0.0.1 -U postgres postgres -c \\"CREATE USER my_user WITH password '${MY_PASSWORD}';\\""
+'''
+```
