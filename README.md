@@ -28,10 +28,12 @@ try {
     System.exit(1);
 }
 ```
+For example, the AWS SDK points to this document with regards to its handling of exceptions:
+https://docs.oracle.com/javase/tutorial/essential/exceptions/runtime.html
 
 ### Documentation
 ##### Usage
-The comamnd can be used as follows.
+The command can be used as follows.
 `eb <command> [flags]`
 
 The `<command>` can be passed in without quotas, such as `eb curl www.google.com` provided  none of the below flags are duplicated. If a command contains a flag below, the command can be passed in using by using quotes, such as `eb "curl -f www.google.com"`
@@ -65,10 +67,16 @@ Fail the `eb` 75% of the time without running anything. Useful in testing expres
 Retry on all non-zero exit codes.
 * `-c, --retry-on-exit-codes`
 *(String)* A comma delimited list of exit codes to try on.
-* `  -x, --retry-on-regexp-matches`
+* `-x, --retry-on-regexp-matches`
 A comma delimited list of regular expressions found in stderr or stdout to retry on.
 * `-s, --retry-on-string-matches`
 A comma delimited list of strings found in stderr or stdout to retry on.
+* `-C, --success-on-exit-codes`
+*(String)* A comma delimited list of exit codes  to change to success codes.
+* `-X, --success-on-regexp-matches`
+A comma delimited list of regular expressions found in stderr or stdout  to change to success codes.
+* `-S, --success-on-string-matches`
+A comma delimited list of strings found in stderr or stdout  to change to success codes.
 * `-v, --verbose` 
 Enable Verbose Output.
 * `--version` 
@@ -184,10 +192,21 @@ $ eb kubectl get pods -e "i*15+5*r" -r 10 -t 10 -s "Unable to connect to the ser
 ```
 
 ### Jenkins Example
-
 Jenkins is really difficult to deal with when using quotes, and with `eb`, you may need multiple quotes. Here is an exmaple of that:
 ```
 sh '''
 PGPASSWORD=${PASSWORD} eb "psql -h 127.0.0.1 -U postgres postgres -c \\"CREATE USER my_user WITH password '${MY_PASSWORD}';\\""
 '''
 ```
+
+### Additional Tips
+This tool was written with the parameters it has because they all have a use case I have specifically encountered.
+
+For example, creating a gcloud instance can first fail with a "Too many API Requests". If retrying on this, a subsequent run of the command may result in "Cloud SQL Instance Already Exists"-- despite the fact that the first attempt was actually a failure.
+
+```
+ERROR: (gcloud.sql.instances.create) RESOURCE_EXHAUSTED: Quota exceeded for quota group 'default' and limit 'Queries per user per 100 seconds' of service 'sqladmin.googleapis.com' for consumer 'project_number:548026760868'.
+ERROR: (gcloud.sql.instances.create) Resource in project [saas-hub-stg] is the subject of a conflict: The Cloud SQL instance already exists. When you delete an instance, you cannot reuse the name of the deleted instance until one week from the deletion date.
+```
+
+As a result, a combination of both `eb "gcloud sql instances create ..." --retry-on-string-matches "Quota exceeded for quota group" --success-on-string-matches "The Cloud SQL instance already exists." may be needed.

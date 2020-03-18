@@ -52,6 +52,9 @@ var _retryOnAll bool
 var _retryOnExitCodes string
 var _retryOnStringMatches string
 var _retryOnRegexpMatches string
+var _successOnExitCodes string
+var _successOnStringMatches string
+var _successOnRegexpMatches string
 var _performOnFailure string
 
 // The command definition
@@ -77,8 +80,20 @@ backoff based off of either error messages, or exit codes.`,
 		if _kill {
 			s1 := rand.NewSource(time.Now().UnixNano())
 			r1 := rand.New(s1)
-			if r1.Float64() > .25 {
-				fmt.Println("Sample failure")
+			if r1.Float64() > .875 {
+				fmt.Println("Sample Error: TLS Timeout")
+				os.Exit(3)
+			} else if r1.Float64() > .75 {
+				fmt.Println("Sample Error: Request Timed Out")
+				os.Exit(3)
+			} else if r1.Float64() > .50 {
+				fmt.Println("Sample Error: Rate Limit Exceeded")
+				os.Exit(2)
+			} else if r1.Float64() > .375 {
+				fmt.Println("Sample Error: Already Exists")
+				os.Exit(1)
+			} else if r1.Float64() > .25 {
+				fmt.Println("Sample Error: Concurrent Modification")
 				os.Exit(1)
 			} else {
 				fmt.Println("Sample success")
@@ -91,8 +106,8 @@ backoff based off of either error messages, or exit codes.`,
 			os.Exit(1)
 		}
 		command := convertArgs(args)
-		expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps, performOnFailure := loadParameters(cmd, command[0], _iniFile, _expression, _retries, _duration, _retryOnAll, _retryOnExitCodes, _retryOnStringMatches, _retryOnRegexpMatches, _performOnFailure)
-		os.Exit(ExponentialBackoff(command, expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps, performOnFailure))
+		expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps, successOnExitCodes, successOnStrings, successOnRegexps, performOnFailure := loadParameters(cmd, command[0], _iniFile, _expression, _retries, _duration, _retryOnAll, _retryOnExitCodes, _retryOnStringMatches, _retryOnRegexpMatches, _successOnExitCodes, _successOnStringMatches, _successOnRegexpMatches, _performOnFailure)
+		os.Exit(ExponentialBackoff(command, expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps, successOnExitCodes, successOnStrings, successOnRegexps, performOnFailure))
 	},
 }
 
@@ -173,7 +188,69 @@ func getBoolParameter(cmd *cobra.Command, cfg *ini.File, command string, key str
 	return currentValue
 }
 
-func loadParameters(cmd *cobra.Command, command string, iniFile string, expression string, retries int, duration int, retryOnAll bool, retryOnExitCodes string, retryOnStringMatches string, retryOnRegexpMatches string, performOnFailure string) (string, int, int, bool, []int, []string, []*regexp.Regexp, string) {
+func csvStringToIntArray(s string) []int {
+	log.Debug("Converting to int array:", s)
+	var retint []int
+	if s != "" {
+		r := csv.NewReader(strings.NewReader(s))
+		intStr, err := r.Read()
+		if err != nil {
+			log.Critical(err)
+			os.Exit(1)
+		}
+
+		log.Debug("Int fields found:\n")
+		for _, field := range intStr {
+			code, err := strconv.Atoi(field)
+			if err != nil {
+				log.Critical(err)
+				os.Exit(1)
+			}
+			retint = append(retint, code)
+			log.Debug(code)
+		}
+	}
+	return retint
+}
+
+func csvStringToStringArray(s string) []string {
+	log.Debug("Converting to string array:", s)
+	var retstring []string
+	if s != "" {
+		r := csv.NewReader(strings.NewReader(s))
+		stringsStr, err := r.Read()
+		if err != nil {
+			log.Critical(err)
+			os.Exit(1)
+		}
+		log.Debug("Strings Found:\n")
+		for _, field := range stringsStr {
+			log.Debug(field)
+			retstring = append(retstring, field)
+		}
+	}
+	return retstring
+}
+func csvStringToRegexpArray(s string) []*regexp.Regexp {
+	log.Debug("Converting to regexp array:", s)
+	var retRegexps []*regexp.Regexp
+	if s != "" {
+		r := csv.NewReader(strings.NewReader(s))
+		regexpStr, err := r.Read()
+		if err != nil {
+			log.Critical(err)
+			os.Exit(1)
+		}
+		log.Debug("Regexp Strings Found:\n")
+		for _, field := range regexpStr {
+			log.Debug(field)
+			retRegexps = append(retRegexps, regexp.MustCompile(field))
+		}
+	}
+	return retRegexps
+}
+
+func loadParameters(cmd *cobra.Command, command string, iniFile string, expression string, retries int, duration int, retryOnAll bool, retryOnExitCodes string, retryOnStringMatches string, retryOnRegexpMatches string, successOnExitCodes string, successOnStringMatches string, successOnRegexpMatches string, performOnFailure string) (string, int, int, bool, []int, []string, []*regexp.Regexp, []int, []string, []*regexp.Regexp, string) {
 	// Configure the defaxwult location of the INI file
 	loadIniFile := iniFile
 	if iniFile == "" {
@@ -188,7 +265,7 @@ func loadParameters(cmd *cobra.Command, command string, iniFile string, expressi
 		log.Info("No INI file specified. Using " + loadIniFile + " if it exists.")
 	}
 
-	// Read the INI file - Local values override global values
+	// Read the INI file - Local values override global valuesds
 	cfg, err := ini.Load(loadIniFile)
 	if err != nil {
 		if iniFile != "" {
@@ -215,6 +292,9 @@ func loadParameters(cmd *cobra.Command, command string, iniFile string, expressi
 		log.Debug("Retry On Exit Codes: ", retryOnExitCodes)
 		log.Debug("Retry On String Matches: ", retryOnStringMatches)
 		log.Debug("Retry On Regexp Matches: ", retryOnRegexpMatches)
+		log.Debug("Success On Exit Codes: ", successOnExitCodes)
+		log.Debug("Success On String Matches: ", successOnStringMatches)
+		log.Debug("Success On Regexp Matches: ", successOnRegexpMatches)
 		log.Debug("Perform On Failure: ", performOnFailure)
 
 		// If anything is defined in the local section, override
@@ -222,6 +302,9 @@ func loadParameters(cmd *cobra.Command, command string, iniFile string, expressi
 		retryOnExitCodes = getStringParameter(cmd, cfg, command, "retry_on_exit_codes", retryOnExitCodes, "retry-on-exit-codes")
 		retryOnStringMatches = getStringParameter(cmd, cfg, command, "retry_on_string_matches", retryOnStringMatches, "retry-on-string-matches")
 		retryOnRegexpMatches = getStringParameter(cmd, cfg, command, "retry_on_regexp_matches", retryOnRegexpMatches, "retry-on-regexp-matches")
+		successOnExitCodes = getStringParameter(cmd, cfg, command, "success_on_exit_codes", successOnExitCodes, "success-on-exit-codes")
+		successOnStringMatches = getStringParameter(cmd, cfg, command, "success_on_string_matches", successOnStringMatches, "success-on-string-matches")
+		successOnRegexpMatches = getStringParameter(cmd, cfg, command, "success_on_regexp_matches", successOnRegexpMatches, "success-on-regexp-matches")
 		performOnFailure = getStringParameter(cmd, cfg, command, "perform_on_failure", performOnFailure, "perform-on-failure")
 		retryOnAll = getBoolParameter(cmd, cfg, command, "retry_on_all", retryOnAll, "retry-on-all")
 		expression = getStringParameter(cmd, cfg, command, "expression", expression, "expression")
@@ -236,6 +319,9 @@ func loadParameters(cmd *cobra.Command, command string, iniFile string, expressi
 		log.Debug("Retry On Exit Codes: ", retryOnExitCodes)
 		log.Debug("Retry On String Matches: ", retryOnStringMatches)
 		log.Debug("Retry On Regexp Matches: ", retryOnRegexpMatches)
+		log.Debug("Success On Exit Codes: ", successOnExitCodes)
+		log.Debug("Success On String Matches: ", successOnStringMatches)
+		log.Debug("Success On Regexp Matches: ", successOnRegexpMatches)
 		log.Debug("Perform On Failure: ", performOnFailure)
 	}
 
@@ -248,81 +334,50 @@ func loadParameters(cmd *cobra.Command, command string, iniFile string, expressi
 		if retries == -1 && duration == -1 {
 			retries = _realRetryDefault
 			duration = _realMaxDurationDefault
-		}
+		}d
 	*/
 
 	// Treat the retry codes list as a row from a CSV file so we don't need to do intelligent parsing
-	var ignoreExitCodes []int
-	if retryOnExitCodes != "" {
-		r := csv.NewReader(strings.NewReader(retryOnExitCodes))
-		ignoreExitCodesStr, err := r.Read()
-		if err != nil {
-			log.Critical(err)
-			os.Exit(1)
-		}
-
-		log.Debug("Retrying on the following exit codes:\n")
-		for _, field := range ignoreExitCodesStr {
-			code, err := strconv.Atoi(field)
-			if err != nil {
-				log.Critical(err)
-				os.Exit(1)
-			}
-			ignoreExitCodes = append(ignoreExitCodes, code)
-			log.Debug(code)
-		}
-	}
+	// var ignoreExitCodes []int
+	log.Debug("Converting retyOnExitCodes...")
+	ignoreExitCodes := csvStringToIntArray(retryOnExitCodes)
+	log.Debug("Converting successOnExitCodes...")
+	successExitCodes := csvStringToIntArray(successOnExitCodes)
 
 	// Treat the retry strings list as a row from a CSV file so we don't need to do intelligent parsing
-	var ignoreStrings []string
-	if retryOnStringMatches != "" {
-		r := csv.NewReader(strings.NewReader(retryOnStringMatches))
-		ignoreStringsStr, err := r.Read()
-		if err != nil {
-			log.Critical(err)
-			os.Exit(1)
-		}
-		log.Debug("Retrying if the following strings are found:\n")
-		for _, field := range ignoreStringsStr {
-			log.Debug(field)
-			ignoreStrings = append(ignoreStrings, field)
-		}
-	}
+	// var ignoreStrings []string
+	log.Debug("Converting retryOnStringMatches...")
+	ignoreStrings := csvStringToStringArray(retryOnStringMatches)
+	log.Debug("Converting successOnStringMatches...")
+	successStrings := csvStringToStringArray(successOnStringMatches)
 
 	// Treat the retry strings list as a row from a CSV file so we don't need to do intelligent parsing
-	var ignoreRegexps []*regexp.Regexp
-	if retryOnRegexpMatches != "" {
-		r := csv.NewReader(strings.NewReader(retryOnRegexpMatches))
-		ignoreRegexpStr, err := r.Read()
-		if err != nil {
-			log.Critical(err)
-			os.Exit(1)
-		}
-		log.Debug("Retrying if the following Regular Expressions are found:\n")
-		for _, field := range ignoreRegexpStr {
-			log.Debug(field)
-			ignoreRegexps = append(ignoreRegexps, regexp.MustCompile(field))
-		}
-	}
+	log.Debug("Converting retryOnRegexpMatches...")
+	ignoreRegexps := csvStringToRegexpArray(retryOnRegexpMatches)
+	log.Debug("Converting successOnRegexpMatches...")
+	successRegexps := csvStringToRegexpArray(successOnRegexpMatches)
 
-	return expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps, performOnFailure
+	return expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps, successExitCodes, successStrings, successRegexps, performOnFailure
 }
 
 // ExponentialBackoff this is a separate function because perhaps somebody wants to run this
 // without calling the command line in their golang code
-func ExponentialBackoff(command []string, expression string, retries int, duration int, retryOnAll bool, ignoreExitCodes []int, ignoreStrings []string, ignoreRegexps []*regexp.Regexp, performOnFailure string) int {
+func ExponentialBackoff(command []string, expression string, retries int, duration int, retryOnAll bool, ignoreExitCodes []int, ignoreStrings []string, ignoreRegexps []*regexp.Regexp, successExitCodes []int, successStrings []string, successRegexps []*regexp.Regexp, performOnFailure string) int {
 
-	log.Info("------ Settings ------")
-	log.Info("Expression             : ", expression)
-	log.Info("Retries                : ", retries)
-	log.Info("Duration               : ", duration)
-	log.Info("Retry On All           : ", retryOnAll)
-	log.Info("Retry On Exit Codes    : ", ignoreExitCodes)
-	log.Info("Retry On String Matches: ", ignoreStrings)
-	log.Info("Retry On Regexp Matches: ", ignoreRegexps)
-	log.Info("Perform On Failure     : ", performOnFailure)
-	log.Info("Command to Run         : ", command)
-	log.Info("----------------------")
+	log.Info("-------- Settings -------")
+	log.Info("Expression               : ", expression)
+	log.Info("Retries                  : ", retries)
+	log.Info("Duration                 : ", duration)
+	log.Info("Retry On All             : ", retryOnAll)
+	log.Info("Retry On Exit Codes      : ", ignoreExitCodes)
+	log.Info("Retry On String Matches  : ", ignoreStrings)
+	log.Info("Retry On Regexp Matches  : ", ignoreRegexps)
+	log.Info("Success On Exit Codes    : ", successExitCodes)
+	log.Info("Success On String Matches: ", successStrings)
+	log.Info("Success On Regexp Matches: ", successRegexps)
+	log.Info("Perform On Failure       : ", performOnFailure)
+	log.Info("Command to Run           : ", command)
+	log.Info("-------------------------")
 
 	xIncrement := 0
 	start := time.Now()
@@ -338,6 +393,37 @@ func ExponentialBackoff(command []string, expression string, retries int, durati
 		exitCode := cmd.ProcessState.ExitCode()
 		log.Debug("Command exitted with ", exitCode)
 		needToExit := true
+
+		for i := range successExitCodes {
+			if exitCode != 0 && exitCode == successExitCodes[i] {
+				log.Debug("Program exited with code: ", exitCode, ". Converting to exit code to 0.")
+				exitCode = 0
+			}
+		}
+
+		// Do not exit if output / stderr from the command contained a string in our retryOnMatchedStrings list
+		for i := range successStrings {
+			if exitCode != 0 && strings.Contains(out.String(), successStrings[i]) {
+				log.Debug("Output stream contained: ", successStrings[i], ". Converting exit code to 0.")
+				exitCode = 0
+			}
+			if exitCode != 0 && strings.Contains(stderr.String(), successStrings[i]) {
+				log.Debug("Error stream contained: ", successStrings[i], ". Converting exit code to 0.")
+				exitCode = 0
+			}
+		}
+
+		// Do not exit if output / stderr from the command contained a string in our retryOnMatchedStrings list
+		for i := range successRegexps {
+			if exitCode != 0 && successRegexps[i].MatchString(out.String()) {
+				log.Debug("Output stream contained regexp: ", successRegexps[i], ". Converting exit code to 0.")
+				exitCode = 0
+			}
+			if exitCode != 0 && successRegexps[i].MatchString(stderr.String()) {
+				log.Debug("Error stream contained regexp: ", successRegexps[i], ". Converting exit code to 0.")
+				exitCode = 0
+			}
+		}
 
 		// Do not exit if the exit code matched our input retryOnExitCodes
 		if exitCode != 0 {
@@ -509,6 +595,9 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&_retryOnExitCodes, "retry-on-exit-codes", "c", "", "A comma delimited list of exit codes to try on")
 	rootCmd.PersistentFlags().StringVarP(&_retryOnStringMatches, "retry-on-string-matches", "s", "", "A comma delimited list of strings found in stderr or stdout to retry on")
 	rootCmd.PersistentFlags().StringVarP(&_retryOnRegexpMatches, "retry-on-regexp-matches", "x", "", "A comma delimited list of regular expressions found in stderr or stdout to retry on")
+	rootCmd.PersistentFlags().StringVarP(&_successOnExitCodes, "success-on-exit-codes", "C", "", "A comma delimited list of exit codes to change to success codes")
+	rootCmd.PersistentFlags().StringVarP(&_successOnStringMatches, "success-on-string-matches", "S", "", "A comma delimited list of strings to change to success codes")
+	rootCmd.PersistentFlags().StringVarP(&_successOnRegexpMatches, "success-on-regexp-matches", "X", "", "A comma delimited list of regular expressions to change to success codes")
 	rootCmd.PersistentFlags().BoolVarP(&_verbose, "verbose", "v", false, "Enable verbose output")
 	rootCmd.PersistentFlags().BoolVar(&_version, "version", false, "Print the version and exit")
 	rootCmd.PersistentFlags().BoolVarP(&_kill, "kill", "k", false, "Immediately exit with a .75 probability (for testing failures)")
