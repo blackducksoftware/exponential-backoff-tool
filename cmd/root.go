@@ -1,19 +1,8 @@
-/*Package cmd Root command for Exponential Backoff
-
-Copyright © 2020 Robert Piskule piskule@synopsys.com
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+/*
+* Copyright 2020-present, Synopsys, Inc. * All rights reserved.
+*
+* This source code is licensed under the Apache-2.0 license found in
+* the LICENSE file in the root directory of this source tree. */
 package cmd
 
 import (
@@ -37,7 +26,7 @@ import (
 
 var log *logging.Logger
 
-var _releaseVersion = "0.0.3"
+var _releaseVersion = "0.0.4"
 
 // The parameters this command takes in
 var _debug bool
