@@ -51,6 +51,14 @@ The variable 'x' is the current iteration (0 based).
 The variable 'i' is the current iteration (1 based).
 The variable 'r' is a random float from 0-1.
 Examples: "x*15+15", "x*x", "(x*x)+(10*r)"
+* `-O, --fail-on-regexp-matches`
+*(String)* A comma delimited list of regular expressions to consider failures to retry on.
+* `-o, --fail-on-string-matches`
+*(String)* A comma delimited list of strings to consider failures to retry on.
+* `-U, --fail-unless-regexp-matches`
+*(String)* A comma delimited list of regular expressions to consider successful. Fail otherwise.
+* `-u, --fail-unless-string-matches`
+*(String)* A comma delimited list of strings consider successful. Fail otherwise.
 * `-h, --help`
 Print the help screen
 * `-f, --ini-file`
@@ -62,21 +70,21 @@ Fail the `eb` 75% of the time without running anything. Useful in testing expres
 * `-p, --perfom-on-failure`
 *(String)* A command to run whenever the original command fails. This command does not exponentially backoff and is intended for cleanup to keep the original command working (such as a command that touchs a file when it runs with the intent of populating it, it fails, and then a subsequent run fails because the file was touched)
 * `-r, --retries`
-*(Intger)* The number of times to retry the command (Default: -1)
+*(Integer)* The number of times to retry the command (Default: -1)
 * `-a, --retry-on-all`
 Retry on all non-zero exit codes.
 * `-c, --retry-on-exit-codes`
 *(String)* A comma delimited list of exit codes to try on.
 * `-x, --retry-on-regexp-matches`
-A comma delimited list of regular expressions found in stderr or stdout to retry on.
+*(String)*A comma delimited list of regular expressions found in stderr or stdout to retry on.
 * `-s, --retry-on-string-matches`
-A comma delimited list of strings found in stderr or stdout to retry on.
+*(String)*A comma delimited list of strings found in stderr or stdout to retry on.
 * `-C, --success-on-exit-codes`
 *(String)* A comma delimited list of exit codes  to change to success codes.
 * `-X, --success-on-regexp-matches`
-A comma delimited list of regular expressions found in stderr or stdout  to change to success codes.
+*(String)*A comma delimited list of regular expressions found in stderr or stdout  to change to success codes.
 * `-S, --success-on-string-matches`
-A comma delimited list of strings found in stderr or stdout  to change to success codes.
+*(String)*A comma delimited list of strings found in stderr or stdout  to change to success codes.
 * `-v, --verbose` 
 Enable Verbose Output.
 * `--version` 
@@ -190,6 +198,97 @@ This will retry either 10 times or for 10 seconds whichever comes first, waiting
 ```
 $ eb kubectl get pods -e "i*15+5*r" -r 10 -t 10 -s "Unable to connect to the server"
 ```
+
+This command will convert any success codes that contain a string to failures. This is useful for web requests that return 200 on failures (see S3 documentation). As a result, this command will fail and retry on messages such as "200 OK: Your web request failed".
+```
+$ eb "eb -k" -e 0 -o failed -m -a
+...
+...
+Next Retry Attempt 35 in 0s ...
+Next Retry Attempt 36 in 0s ...
+Next Retry Attempt 37 in 0s ...
+Sample Success: 200 OK: Your request succeeded
+```
+
+This command will convert any success codes that contain a regexp to failures. This is useful for web requests that return 200 on failures (see S3 documentation). As a result, this command will fail and retry on messages such as "200 OK: Your web request failed".
+```
+$ ./eb "./eb -k" -e "0" -O 200.*failed -a -m
+...
+...
+Next Retry Attempt 116 in 0s ...
+Next Retry Attempt 117 in 0s ...
+Next Retry Attempt 118 in 0s ...
+Sample Success: 200 OK: Your request succeeded
+```
+
+This command consides everything a failure unless it contains the string 'succeeded'.
+```
+$ eb "eb -k" -e "0" -u "succeeded" -m -a
+...
+Next Retry Attempt 155 in 0s ...
+Next Retry Attempt 156 in 0s ...
+Next Retry Attempt 157 in 0s ...
+Sample Success: 200 OK: Your request succeeded
+```
+
+This command consides everything a failure unless it contains the regexp 'suc.*eded'.
+```
+$ eb "eb -k" -e "0" -U "suc.*eded" -m -a
+...
+Next Retry Attempt 155 in 0s ...
+Next Retry Attempt 156 in 0s ...
+Next Retry Attempt 157 in 0s ...
+Sample Success: 200 OK: Your request succeeded
+```
+
+
+This command is useful for testing out retry logic. It will keep retrying until is sees 200.*succeeded in the console output.
+```
+$ while true; do eb "eb -k" -U "200.*succeeded" -e ".001*x" -a; done
+Sample Success: 200 OK: Your request succeeded
+Sample Success: 200 OK: Your request succeeded
+Sample Success: 200 OK: Your request succeeded
+Sample Success: 200 OK: Your request succeeded
+Sample Success: 200 OK: Your request succeeded
+Sample Success: 200 OK: Your request succeeded
+```
+
+Contrast the above command with the following command. Some web requests return 200 on failures which is considered successful (see S3 documentation) despite the fact that for you it is a failure.
+```
+$ while true; do eb "eb -k" -a -e ".001*x"; done
+Sample Error: 200 OK: The web request failed
+Sample Error: 200 OK: The web request failed
+Sample Error: 200 OK: The web request failed
+Sample Success: 200 OK: Your request succeeded
+Sample Error: 200 OK: The web request failed
+Sample Error: 200 OK: The web request failed
+```
+
+This command will keep retrying on all failures printing out only a simply "Retrying" message
+```
+$ eb "eb -k" -e ".001*x" -m -a
+...
+...
+Next Retry Attempt 127 in 126ms ...
+Next Retry Attempt 128 in 127ms ...
+Next Retry Attempt 129 in 128ms ...
+Sample Success: 200 OK: Your request succeeded
+```
+
+This command will keep retrying and print out any error messages that are received until the command succeeds. Note that in the below output, `Sample Error: 200 OK: The web request failed` actually returns 0 as a return code since web requests can get tricky.
+```
+$ eb "eb -k" -e ".001*x" -M -a
+...
+...
+Sample Error: Request Timed Out
+Next Retry Attempt 13 in 12ms ...
+Sample Error: Request Timed Out
+Next Retry Attempt 14 in 13ms ...
+Sample Error: Concurrent Modification
+Next Retry Attempt 15 in 14ms ...
+Sample Error: 200 OK: The web request failed
+```
+
 
 ### Jenkins Example
 Jenkins is really difficult to deal with when using quotes, and with `eb`, you may need multiple quotes. Here is an exmaple of that:

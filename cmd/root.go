@@ -437,12 +437,10 @@ func ExponentialBackoff(command []string, expression string, retries int, durati
 			if strings.Contains(out.String(), failOnStrings[i]) {
 				log.Debug("Output stream contained: ", failOnStrings[i], ". Converting exit code to -1.")
 				exitCode = -1
-				needToExit = false
 			}
 			if strings.Contains(stderr.String(), failOnStrings[i]) {
 				log.Debug("Error stream contained: ", failOnStrings[i], ". Converting exit code to -1.")
 				exitCode = -1
-				needToExit = false
 			}
 		}
 
@@ -451,18 +449,15 @@ func ExponentialBackoff(command []string, expression string, retries int, durati
 			if failOnRegexps[i].MatchString(out.String()) {
 				log.Debug("Output stream contained regexp: ", failOnRegexps[i], ". Converting exit code to -1.")
 				exitCode = -1
-				needToExit = false
 			}
 			if failOnRegexps[i].MatchString(stderr.String()) {
 				log.Debug("Error stream contained regexp: ", failOnRegexps[i], ". Converting exit code to -1.")
 				exitCode = -1
-				needToExit = false
 			}
 		}
 
 		if len(failUnlessStrings) > 0 {
 			exitCode = -1
-			needToExit = false
 			for i := range failUnlessStrings {
 				if strings.Contains(out.String(), failUnlessStrings[i]) {
 					log.Debug("Output stream contained: ", failUnlessStrings[i], ". Converting exit code to 0.")
