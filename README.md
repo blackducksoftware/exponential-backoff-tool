@@ -45,6 +45,8 @@ This command will provide the original exit code from the command running.
 Enable debugging.
 * `-d, --duration`
 *(Integer)* How long to keep retrying for (Default: -1)
+* `-b, --enable-metrics`
+Enable collection of call metrics. The metrics are output as a a csv file, eb-metrics.csv.
 * `-e, --expression`
 *(String)* A mathmematical expression representing the time to wait on each retry (Default: "0").
 The variable 'x' is the current iteration (0 based).
@@ -67,6 +69,8 @@ The INI file supports global and local parameters.
 Local parameters override global parameters.
 * `-k, --kill`
 Fail the `eb` 75% of the time without running anything. Useful in testing expressions or intermittent failures.
+* `-P, --perform-on-exit string`
+*(String)* A command to run prior to exiting. This command does not exponentially backoff and is intended for uploading performance metrics. This always runs regardless of whether the original command succeeds or fails.
 * `-p, --perfom-on-failure`
 *(String)* A command to run whenever the original command fails. This command does not exponentially backoff and is intended for cleanup to keep the original command working (such as a command that touchs a file when it runs with the intent of populating it, it fails, and then a subsequent run fails because the file was touched)
 * `-r, --retries`
@@ -150,6 +154,14 @@ Command line parameters override the INI file. Local sections of the INI file ov
 # no contents due to command failure, and then subsequent commands
 # fail because the file exists
 # perform_on_failure: "echo failed"
+
+# Whether to collect metrics. The metrics are output as a a csv file, eb-metrics.csv.
+# metrics_enabled: "true"
+
+# Perform this command when the command succeeds or fails. Note that -P at the end
+# to prevent EB from entering an infinite loop.
+# perform_on_exit: "eb 'gsutil cp ./eb-metrics.csv gs://my-bucket/eb-metrics.csv' -P 'true'"
+
 ```
 
 ### Examples
@@ -287,6 +299,12 @@ Next Retry Attempt 14 in 13ms ...
 Sample Error: Concurrent Modification
 Next Retry Attempt 15 in 14ms ...
 Sample Error: 200 OK: The web request failed
+```
+
+This command will collect metrics, and then upload them to a cloud bucket when the command completes. Note the nested usage of `eb` could case an infinite loop, so we add `-P 'true'` to prevent this.
+```
+$ eb "echo this is some text" -b -P "eb 'gsutil cp ./eb-metrics.csv gs://my-bucket/eb-metrics.csv' -P 'true'"
+this is some text
 ```
 
 

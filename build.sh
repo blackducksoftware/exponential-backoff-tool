@@ -16,7 +16,7 @@ go get github.com/inconshreveable/mousetrap
 go get gopkg.in/ini.v1
 go get github.com/mattn/go-shellwords
 
-VERSION=0.0.4
+VERSION=0.0.6
 
 # windows
 env GOOS=windows GOARCH=amd64 go build -o bin/eb ./main.go

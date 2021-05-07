@@ -26,7 +26,7 @@ import (
 
 var log *logging.Logger
 
-var _releaseVersion = "0.0.4"
+var _releaseVersion = "0.0.6"
 
 // The parameters this command takes in
 var _debug bool
@@ -51,6 +51,8 @@ var _failOnRegexpMatches string
 var _failUnlessStringMatches string
 var _failUnlessRegexpMatches string
 var _performOnFailure string
+var _performOnExit string
+var _metricsEnabled bool
 
 // The command definition
 var rootCmd = &cobra.Command{
@@ -106,8 +108,12 @@ backoff based off of either error messages, or exit codes.`,
 			os.Exit(1)
 		}
 		command := convertArgs(args)
-		expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps, successOnExitCodes, successOnStrings, successOnRegexps, performOnFailure, failOnStrings, failOnRegexps, failUnlessStrings, failUnlessRegexps, printRetryOnFailure, printVerboseRetryOnFailure  := loadParameters(cmd, command[0], _iniFile, _expression, _retries, _duration, _retryOnAll, _retryOnExitCodes, _retryOnStringMatches, _retryOnRegexpMatches, _successOnExitCodes, _successOnStringMatches, _successOnRegexpMatches, _performOnFailure, _failOnStringMatches, _failOnRegexpMatches, _failUnlessStringMatches, _failUnlessRegexpMatches, _printRetryOnFailure, _printVerboseRetryOnFailure)
-		os.Exit(ExponentialBackoff(command, expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps, successOnExitCodes, successOnStrings, successOnRegexps, performOnFailure, failOnStrings, failOnRegexps, failUnlessStrings, failUnlessRegexps, printRetryOnFailure, printVerboseRetryOnFailure))
+		expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps, successOnExitCodes, successOnStrings, successOnRegexps, performOnFailure, failOnStrings, failOnRegexps, failUnlessStrings, failUnlessRegexps, printRetryOnFailure, printVerboseRetryOnFailure, metricsEnabled, performOnExit := loadParameters(cmd, command[0], _iniFile, _expression, _retries, _duration, _retryOnAll, _retryOnExitCodes, _retryOnStringMatches, _retryOnRegexpMatches, _successOnExitCodes, _successOnStringMatches, _successOnRegexpMatches, _performOnFailure, _failOnStringMatches, _failOnRegexpMatches, _failUnlessStringMatches, _failUnlessRegexpMatches, _printRetryOnFailure, _printVerboseRetryOnFailure, _metricsEnabled, _performOnExit)
+		code := ExponentialBackoff(command, expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps, successOnExitCodes, successOnStrings, successOnRegexps, performOnFailure, failOnStrings, failOnRegexps, failUnlessStrings, failUnlessRegexps, printRetryOnFailure, printVerboseRetryOnFailure, metricsEnabled)
+		if performOnExit != "" {
+			catchFailure("Exit",performOnExit)
+		}
+		os.Exit(code)
 	},
 }
 
@@ -250,7 +256,7 @@ func csvStringToRegexpArray(s string) []*regexp.Regexp {
 	return retRegexps
 }
 
-func loadParameters(cmd *cobra.Command, command string, iniFile string, expression string, retries int, duration int, retryOnAll bool, retryOnExitCodes string, retryOnStringMatches string, retryOnRegexpMatches string, successOnExitCodes string, successOnStringMatches string, successOnRegexpMatches string, performOnFailure string, failOnStringMatches string, failOnRegexpMatches string, failUnlessStringMatches string, failUnlessRegexpMatches string, printRetryOnFailure bool, printVerboseRetryOnFailure bool) (string, int, int, bool, []int, []string, []*regexp.Regexp, []int, []string, []*regexp.Regexp, string, []string, []*regexp.Regexp, []string, []*regexp.Regexp, bool, bool) {
+func loadParameters(cmd *cobra.Command, command string, iniFile string, expression string, retries int, duration int, retryOnAll bool, retryOnExitCodes string, retryOnStringMatches string, retryOnRegexpMatches string, successOnExitCodes string, successOnStringMatches string, successOnRegexpMatches string, performOnFailure string, failOnStringMatches string, failOnRegexpMatches string, failUnlessStringMatches string, failUnlessRegexpMatches string, printRetryOnFailure bool, printVerboseRetryOnFailure bool, metricsEnabled bool, performOnExit string) (string, int, int, bool, []int, []string, []*regexp.Regexp, []int, []string, []*regexp.Regexp, string, []string, []*regexp.Regexp, []string, []*regexp.Regexp, bool, bool, bool, string) {
 	// Configure the defaxwult location of the INI file
 	loadIniFile := iniFile
 	if iniFile == "" {
@@ -283,6 +289,8 @@ func loadParameters(cmd *cobra.Command, command string, iniFile string, expressi
 		expression = getStringParameter(cmd, cfg, "", "expression", expression, "expression")
 		retries = getIntParameter(cmd, cfg, "", "retries", retries, "retries")
 		duration = getIntParameter(cmd, cfg, "", "duration", duration, "duration")
+		metricsEnabled = getBoolParameter(cmd, cfg, "", "metrics_enabled", metricsEnabled, "metrics-enabled")
+		performOnExit = getStringParameter(cmd, cfg, "", "perform_on_exit", performOnExit, "perform-on-exit")
 
 		log.Debug("After Loading Global INI Settings:")
 		log.Debug("Expression: ", expression)
@@ -296,12 +304,14 @@ func loadParameters(cmd *cobra.Command, command string, iniFile string, expressi
 		log.Debug("Success On String Matches: ", successOnStringMatches)
 		log.Debug("Success On Regexp Matches: ", successOnRegexpMatches)
 		log.Debug("Perform On Failure: ", performOnFailure)
+		log.Debug("Perform On Exit: ", performOnExit)
 		log.Debug("Fail On String Matches: ", failOnStringMatches)
 		log.Debug("Fail On Regexp Matches: ", failOnRegexpMatches)
 		log.Debug("Fail Unless String Matches: ", failUnlessStringMatches)
 		log.Debug("Fail Unless Regexp Matches: ", failUnlessRegexpMatches)
 		log.Debug("Print Retry On Failure: ", printRetryOnFailure)
 		log.Debug("Print Verbose Retry On Failure: ", printVerboseRetryOnFailure)
+		log.Debug("Metrics Enabled: ", metricsEnabled)
 
 		// If anything is defined in the local section, override
 		// cmd.Flags().IsSet()
@@ -312,6 +322,7 @@ func loadParameters(cmd *cobra.Command, command string, iniFile string, expressi
 		successOnStringMatches = getStringParameter(cmd, cfg, command, "success_on_string_matches", successOnStringMatches, "success-on-string-matches")
 		successOnRegexpMatches = getStringParameter(cmd, cfg, command, "success_on_regexp_matches", successOnRegexpMatches, "success-on-regexp-matches")
 		performOnFailure = getStringParameter(cmd, cfg, command, "perform_on_failure", performOnFailure, "perform-on-failure")
+		performOnExit = getStringParameter(cmd, cfg, command, "perform_on_exit", performOnExit, "perform-on-exit")
 		failOnStringMatches = getStringParameter(cmd, cfg, command, "fail_on_string_matches", failOnStringMatches, "fail-on-string-matches")
 		failOnRegexpMatches = getStringParameter(cmd, cfg, command, "fail_on_regexp_matches", failOnRegexpMatches, "fail-on-regexp-matches")
 		failUnlessStringMatches = getStringParameter(cmd, cfg, command, "fail_unless_string_matches", failUnlessStringMatches, "fail-unless-string-matches")
@@ -322,6 +333,7 @@ func loadParameters(cmd *cobra.Command, command string, iniFile string, expressi
 		duration = getIntParameter(cmd, cfg, command, "duration", duration, "duration")
 		printRetryOnFailure = getBoolParameter(cmd, cfg, command, "print_retry_on_failure", printRetryOnFailure, "print-retry-on-failure")
 		printVerboseRetryOnFailure = getBoolParameter(cmd, cfg, command, "print_verbose_retry_on_failure", printVerboseRetryOnFailure, "print-verbose-retry-on-failure")
+		metricsEnabled = getBoolParameter(cmd, cfg, command, "metrics_enabled", metricsEnabled, "metrics-enabled")
 
 
 		log.Debug("After Loading Local INI Settings:")
@@ -336,12 +348,15 @@ func loadParameters(cmd *cobra.Command, command string, iniFile string, expressi
 		log.Debug("Success On String Matches: ", successOnStringMatches)
 		log.Debug("Success On Regexp Matches: ", successOnRegexpMatches)
 		log.Debug("Perform On Failure: ", performOnFailure)
+		log.Debug("Perform On Exit: ", performOnExit)
 		log.Debug("Fail On String Matches: ", failOnStringMatches)
 		log.Debug("Fail On Regexp Matches: ", failOnRegexpMatches)
 		log.Debug("Fail Unless String Matches: ", failUnlessStringMatches)
 		log.Debug("Fail Unless Regexp Matches: ", failUnlessRegexpMatches)
 		log.Debug("Print Retry On Failure: ", printRetryOnFailure)
 		log.Debug("Print Verbose Retry On Failure: ", printVerboseRetryOnFailure)
+		log.Debug("Metrics Enabled: ", metricsEnabled)
+
 	}
 
 	// If after checking everywhere, the values are still -1, set them to their defaults
@@ -389,12 +404,12 @@ func loadParameters(cmd *cobra.Command, command string, iniFile string, expressi
 	log.Info("Fail On String Matches: ", failUnlessStringMatches)
 	log.Info("Fail On String Matches: ", failUnlessStrings)
 
-	return expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps, successExitCodes, successStrings, successRegexps, performOnFailure, failOnStrings, failOnRegexps, failUnlessStrings, failUnlessRegexps, printRetryOnFailure, printVerboseRetryOnFailure
+	return expression, retries, duration, retryOnAll, ignoreExitCodes, ignoreStrings, ignoreRegexps, successExitCodes, successStrings, successRegexps, performOnFailure, failOnStrings, failOnRegexps, failUnlessStrings, failUnlessRegexps, printRetryOnFailure, printVerboseRetryOnFailure, metricsEnabled, performOnExit
 }
 
 // ExponentialBackoff this is a separate function because perhaps somebody wants to run this
 // without calling the command line in their golang code
-func ExponentialBackoff(command []string, expression string, retries int, duration int, retryOnAll bool, ignoreExitCodes []int, ignoreStrings []string, ignoreRegexps []*regexp.Regexp, successExitCodes []int, successStrings []string, successRegexps []*regexp.Regexp, performOnFailure string, failOnStrings []string, failOnRegexps []*regexp.Regexp, failUnlessStrings []string, failUnlessRegexps []*regexp.Regexp, printRetryOnFailure bool, printVerboseRetryOnFailure bool) int {
+func ExponentialBackoff(command []string, expression string, retries int, duration int, retryOnAll bool, ignoreExitCodes []int, ignoreStrings []string, ignoreRegexps []*regexp.Regexp, successExitCodes []int, successStrings []string, successRegexps []*regexp.Regexp, performOnFailure string, failOnStrings []string, failOnRegexps []*regexp.Regexp, failUnlessStrings []string, failUnlessRegexps []*regexp.Regexp, printRetryOnFailure bool, printVerboseRetryOnFailure bool, metricsEnabled bool) int {
 
 	log.Info("-------- Settings -------")
 	log.Info("Expression               : ", expression)
@@ -414,12 +429,20 @@ func ExponentialBackoff(command []string, expression string, retries int, durati
 	log.Info("Fail Unless Regexp Matches: ", failUnlessRegexps)
 	log.Info("Print Retry On Failure: ", printRetryOnFailure)
 	log.Info("Print Verbose Retry On Failure: ", printVerboseRetryOnFailure)
+	log.Info("Metrics Enabled: ", metricsEnabled)
 	log.Info("Command to Run           : ", command)
 	log.Info("-------------------------")
+
+	// we are going to change the global var to false if
+	// metric logging fails. So we need to reset it to whatever
+	// was loaded from the config
+	_metricsEnabled = metricsEnabled
 
 	xIncrement := 0
 	start := time.Now()
 	for {
+		metricStart := time.Now()
+
 		log.Debug("Running:", command[0])
 		log.Debug("Params:", command[1:len(command)])
 		cmd := exec.Command(command[0], command[1:len(command)]...)
@@ -431,6 +454,11 @@ func ExponentialBackoff(command []string, expression string, retries int, durati
 		exitCode := cmd.ProcessState.ExitCode()
 		log.Debug("Command exitted with ", exitCode)
 		needToExit := true
+
+		metricEnd := time.Now()
+		metricElapsed := metricEnd.Sub(metricStart)
+
+		logMetric(metricStart.String(),metricEnd.String(),fmt.Sprintf("%f",metricElapsed.Seconds()),command[0],strings.Join(command[1:len(command)]," "),strconv.Itoa(exitCode),out.String(),stderr.String())
 
 		// Automatic failure if certain string is matched
 		for i := range failOnStrings {
@@ -558,6 +586,7 @@ func ExponentialBackoff(command []string, expression string, retries int, durati
 		}
 
 		if needToExit {
+			
 			log.Debug("Exiting with ", exitCode)
 			os.Stderr.WriteString(stderr.String())
 			fmt.Print(out.String())
@@ -640,38 +669,97 @@ func ExponentialBackoff(command []string, expression string, retries int, durati
 		time.Sleep(sleepForD)
 
 		if performOnFailure != "" {
-			log.Debug("Parsing:", performOnFailure)
-			errorCommand, err := shellwords.Parse(performOnFailure)
-			if err != nil {
-				log.Error("Unable to parse Perform On Failure command input:", performOnFailure)
-				log.Critical(err)
-				os.Exit(1)
-			}
-
-			log.Debug("Perform On Failure Command string parsed as:\n")
-			for _, field := range errorCommand {
-				log.Debug(field)
-			}
-
-			log.Debug("Running:", errorCommand[0])
-			log.Debug("Params:", errorCommand[1:len(errorCommand)])
-			ecmd := exec.Command(errorCommand[0], errorCommand[1:len(errorCommand)]...)
-			var eout bytes.Buffer
-			var estderr bytes.Buffer
-			ecmd.Stdout = &eout
-			ecmd.Stderr = &estderr
-			ecmd.Run()
-			eexitCode := ecmd.ProcessState.ExitCode()
-			log.Debug("Command exitted with ", eexitCode)
-			log.Info(estderr.String())
-			log.Info(eout.String())
-			if eexitCode != 0 {
-				log.Error("Unable To Run Perform On Failure command:", performOnFailure)
-				log.Critical(err)
-				os.Exit(1)
-			}
+			catchFailure("Failure",performOnFailure)			
 		}
 	}
+}
+
+func catchFailure(typeOfCatch string, command string) {
+	log.Debug("Parsing:", command)
+	errorCommand, err := shellwords.Parse(command)
+	if err != nil {
+		log.Error("Unable to parse Perform On ",typeOfCatch," command input:", command)
+		log.Critical(err)
+		os.Exit(1)
+	}
+
+	log.Debug("Perform On ",typeOfCatch," Command string parsed as:\n")
+	for _, field := range errorCommand {
+		log.Debug(field)
+	}
+
+	log.Debug("Running:", errorCommand[0])
+	log.Debug("Params:", errorCommand[1:len(errorCommand)])
+	ecmd := exec.Command(errorCommand[0], errorCommand[1:len(errorCommand)]...)
+	var eout bytes.Buffer
+	var estderr bytes.Buffer
+	ecmd.Stdout = &eout
+	ecmd.Stderr = &estderr
+	ecmd.Run()
+	eexitCode := ecmd.ProcessState.ExitCode()
+	log.Debug("Command exited with ", eexitCode)
+	log.Info(estderr.String())
+	log.Info(eout.String())
+	if eexitCode != 0 {
+		log.Error("Unable To Run Perform On ",typeOfCatch," command:", command)
+		log.Critical(err)
+		os.Exit(1)
+	}
+}
+
+func logMetric(startTime string, endTime string, elapsedTime string, command string, args string, result string, output string, stdErr string) {
+	if ! _metricsEnabled {
+		log.Debug("Metrics disabled")
+		return
+	}
+	csvName := "eb-metrics.csv"
+	headers := []string{"startTime", "endTime", "elapsedTime", "command", "args", "result", "output", "stdErr"}
+	data := []string{startTime, endTime, elapsedTime, command, args, result, output, stdErr}
+
+	info, err := os.Stat(csvName)
+
+	//create new file if it doesn't exist. Insert headers
+    if os.IsNotExist(err) {
+		log.Debug("Creating ",csvName)
+		csvFile, err := os.Create(csvName)
+		if err != nil {
+			log.Error("Unable To Log Metrics! Unable To Create eb-metrics.csv!")
+			log.Error(err)
+			_metricsEnabled = false
+			return
+		}
+
+		w := csv.NewWriter(csvFile)
+		w.Write(headers)
+		w.Flush()
+		csvFile.Close()
+		log.Debug("Created ",csvName)
+
+	} else if err != nil {
+		log.Error("Unable To Log Metrics!")
+		log.Error(err)
+		_metricsEnabled = false
+		return
+	} else if info.IsDir() {
+		// Error if the file we are supposed to write to is a directory
+		log.Error("Unable To Log Metrics! eb-metrics.csv is a directory!")
+		log.Error(err)
+		_metricsEnabled = false
+		return
+	}
+
+	log.Debug("Logging metrics ",data)
+	csvFile, err := os.OpenFile(csvName, os.O_APPEND|os.O_RDWR, 0666)
+	if err != nil {
+		log.Error("Unable To Data Write To Log!")
+		log.Error(err)
+		_metricsEnabled = false
+		return
+	}
+	w := csv.NewWriter(csvFile) // Create a new to the file stream
+	w.Write(data)
+	w.Flush()
+	csvFile.Close()
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -691,7 +779,9 @@ func init() {
 	rootCmd.PersistentFlags().IntVarP(&_retries, "retries", "r", -1, "The number of times to retry the command")
 	rootCmd.PersistentFlags().IntVarP(&_duration, "duration", "d", -1, "How many seconds to keep retrying")
 	rootCmd.PersistentFlags().BoolVarP(&_retryOnAll, "retry-on-all", "a", false, "Retry on all non-zero exit codes")
-	rootCmd.PersistentFlags().StringVarP(&_performOnFailure, "perform-on-failure", "p", "", "A command to run prior to retrying the command")
+	rootCmd.PersistentFlags().BoolVarP(&_metricsEnabled, "enable-metrics", "b", false, "Enable collection of call metrics")
+	rootCmd.PersistentFlags().StringVarP(&_performOnFailure, "perform-on-failure", "p", "", "A command to run prior to retrying the command. Useful for cleanup")
+	rootCmd.PersistentFlags().StringVarP(&_performOnExit, "perform-on-exit", "P", "", "A command to run prior to exiting. Useful for uploading metrics")
 	rootCmd.PersistentFlags().BoolVarP(&_printRetryOnFailure, "print-retry-on-failure", "m", false, "Print a simple retrying message prior to retrying")
 	rootCmd.PersistentFlags().BoolVarP(&_printVerboseRetryOnFailure, "print-verbose-retry-on-failure", "M", false, "Print a verboose retrying message prior to retrying")
 	rootCmd.PersistentFlags().StringVarP(&_retryOnExitCodes, "retry-on-exit-codes", "c", "", "A comma delimited list of exit codes to try on")
