@@ -6,7 +6,7 @@
 # This source code is licensed under the Apache-2.0 license found in
 # the LICENSE file in the root directory of this source tree.
 
-rm -rf ./bin
+rm -rf ./bin || true
 mkdir ./bin
 
 # Dependencies are managed via go.mod / go.sum — no manual go get needed.
