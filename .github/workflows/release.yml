@@ -1,0 +1,75 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          # go1.27.3+ required: first release that distrusts compromised eMudhra
+          # intermediates (CVE-2026-111943). Binaries built with older toolchains
+          # are flagged by scan-certs.
+          go-version: '1.27.x'
+
+      - name: Build (verify only on PRs)
+        run: go build ./...
+
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version: '1.27.x'
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build cross-platform binaries
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          mkdir -p bin
+
+          # linux
+          GOOS=linux  GOARCH=amd64 go build -o bin/eb ./main.go
+          tar -czvf bin/eb_${VERSION}_linux_amd64.tar.gz -C bin eb
+
+          # mac
+          GOOS=darwin GOARCH=amd64 go build -o bin/eb ./main.go
+          tar -czvf bin/eb_${VERSION}_darwin_amd64.tar.gz -C bin eb
+
+          # windows
+          GOOS=windows GOARCH=amd64 go build -o bin/eb.exe ./main.go
+          zip -j bin/eb_${VERSION}_windows_amd64.zip bin/eb.exe
+
+          # standalone linux binary (no archive) for direct GCS upload
+          GOOS=linux GOARCH=amd64 go build -o bin/eb_linux_amd64 ./main.go
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
+        with:
+          files: |
+            bin/eb_${{ steps.version.outputs.VERSION }}_linux_amd64.tar.gz
+            bin/eb_${{ steps.version.outputs.VERSION }}_darwin_amd64.tar.gz
+            bin/eb_${{ steps.version.outputs.VERSION }}_windows_amd64.zip
+            bin/eb_linux_amd64
